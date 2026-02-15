@@ -7,6 +7,9 @@ name = "pypi"
 python = ">3.6.2,<4"
 mechanize = "*"
 mechanicalsoup = "*"
+flask = "*"
+flask-limiter = "*"
+pyjwt = "*"
 
 [tool.poetry.dev-dependencies]
 black = "^22.6.0"
