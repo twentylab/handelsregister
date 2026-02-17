@@ -20,6 +20,87 @@ schlagwortOptionen = {
     "exact": 3
 }
 
+# German states (Bundesländer) mapping
+bundeslaender = {
+    "BW": "Baden-Württemberg",
+    "BY": "Bayern",
+    "BE": "Berlin",
+    "BR": "Brandenburg",
+    "HB": "Bremen",
+    "HH": "Hamburg",
+    "HE": "Hessen",
+    "MV": "Mecklenburg-Vorpommern",
+    "NI": "Niedersachsen",
+    "NW": "Nordrhein-Westfalen",
+    "RP": "Rheinland-Pfalz",
+    "SL": "Saarland",
+    "SN": "Sachsen",
+    "ST": "Sachsen-Anhalt",
+    "SH": "Schleswig-Holstein",
+    "TH": "Thüringen"
+}
+
+# Mapping of district names (German and English) to bundesland codes
+bundesland_name_to_code = {
+    # German names
+    "baden-württemberg": "BW",
+    "baden-wuerttemberg": "BW",
+    "baden württemberg": "BW",
+    "baden wuerttemberg": "BW",
+    "bayern": "BY",
+    "bavaria": "BY",
+    "berlin": "BE",
+    "brandenburg": "BR",
+    "bremen": "HB",
+    "hamburg": "HH",
+    "hessen": "HE",
+    "hesse": "HE",
+    "mecklenburg-vorpommern": "MV",
+    "mecklenburg vorpommern": "MV",
+    "mecklenburg-western pomerania": "MV",
+    "mecklenburg western pomerania": "MV",
+    "niedersachsen": "NI",
+    "lower saxony": "NI",
+    "nordrhein-westfalen": "NW",
+    "nordrhein westfalen": "NW",
+    "north rhine-westphalia": "NW",
+    "north rhine westphalia": "NW",
+    "rheinland-pfalz": "RP",
+    "rheinland pfalz": "RP",
+    "rhineland-palatinate": "RP",
+    "rhineland palatinate": "RP",
+    "saarland": "SL",
+    "sachsen": "SN",
+    "saxony": "SN",
+    "sachsen-anhalt": "ST",
+    "sachsen anhalt": "ST",
+    "saxony-anhalt": "ST",
+    "saxony anhalt": "ST",
+    "schleswig-holstein": "SH",
+    "schleswig holstein": "SH",
+    "thüringen": "TH",
+    "thueringen": "TH",
+    "thuringia": "TH"
+}
+
+def get_bundesland_code(name):
+    """
+    Get bundesland code from district name (German or English).
+    Returns the code or None if not found.
+    """
+    if not name:
+        return None
+    
+    # Normalize the input
+    normalized = name.strip().lower()
+    
+    # Check if it's already a code
+    if normalized.upper() in bundeslaender:
+        return normalized.upper()
+    
+    # Look up in the name mapping
+    return bundesland_name_to_code.get(normalized)
+
 class HandelsRegister:
     def __init__(self, args):
         self.args = args
@@ -83,6 +164,19 @@ class HandelsRegister:
             so_id = schlagwortOptionen.get(self.args.schlagwortOptionen)
 
             self.browser["form:schlagwortOptionen"] = [str(so_id)]
+            
+            # Set bundesland filters if provided
+            if hasattr(self.args, 'bundesland') and self.args.bundesland:
+                bundesland_codes = self.args.bundesland if isinstance(self.args.bundesland, list) else [self.args.bundesland]
+                for code in bundesland_codes:
+                    code_upper = code.upper()
+                    if code_upper in bundeslaender:
+                        form_field = f"form:bundesland{code_upper}"
+                        try:
+                            self.browser[form_field] = ["on"]
+                        except Exception as e:
+                            if self.args.debug:
+                                print(f"Warning: Could not set bundesland {code_upper}: {e}")
 
             response_result = self.browser.submit()
 
@@ -194,6 +288,13 @@ def parse_args():
                           "--json",
                           help="Return response as JSON",
                           action="store_true"
+                        )
+    parser.add_argument(
+                          "-b",
+                          "--bundesland",
+                          help="Filter by German state(s). Use state codes: BW, BY, BE, BR, HB, HH, HE, MV, NI, NW, RP, SL, SN, ST, SH, TH. Can be specified multiple times.",
+                          action="append",
+                          choices=list(bundeslaender.keys())
                         )
     args = parser.parse_args()
 
