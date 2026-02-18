@@ -13,7 +13,8 @@ import os
 import jwt
 from functools import wraps
 from datetime import datetime
-from handelsregister import HandelsRegister, schlagwortOptionen
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from handelsregister import HandelsRegister, schlagwortOptionen, bundeslaender, get_bundesland_code
 
 app = Flask(__name__)
 
@@ -84,6 +85,7 @@ def search_companies():
     Query Parameters:
     - keywords (required): Search keywords
     - mode (optional): Search mode - all|min|exact (default: all)
+    - bundesland (optional): Filter by German state(s). Comma-separated state codes (e.g., "BW,BY")
     - force (optional): Force fresh pull, skip cache (default: false)
     - debug (optional): Enable debug mode (default: false)
     
@@ -107,10 +109,23 @@ def search_companies():
         force = request.args.get('force', 'false').lower() == 'true'
         debug = request.args.get('debug', 'false').lower() == 'true'
         
+        # Parse bundesland parameter
+        bundesland_param = request.args.get('bundesland')
+        bundesland_list = None
+        if bundesland_param:
+            bundesland_list = [code.strip().upper() for code in bundesland_param.split(',')]
+            # Validate bundesland codes
+            invalid_codes = [code for code in bundesland_list if code not in bundeslaender]
+            if invalid_codes:
+                return jsonify({
+                    'error': f'Invalid bundesland code(s): {", ".join(invalid_codes)}. Valid codes: {", ".join(bundeslaender.keys())}'
+                }), 400
+        
         # Create args object for HandelsRegister
         args = argparse.Namespace(
             schlagwoerter=keywords,
             schlagwortOptionen=keyword_mode,
+            bundesland=bundesland_list,
             force=force,
             debug=debug,
             json=True
@@ -123,23 +138,18 @@ def search_companies():
             logger.addHandler(logging.StreamHandler(sys.stdout))
             logger.setLevel(logging.DEBUG)
         
-        # Perform search with timeout
-        import signal
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError(f'Request exceeded timeout of {Config.REQUEST_TIMEOUT} seconds')
-        
-        # Set timeout alarm
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(Config.REQUEST_TIMEOUT)
-        
-        try:
+        # Perform search with timeout using ThreadPoolExecutor
+        def perform_search():
             h = HandelsRegister(args)
             h.open_startpage()
-            companies = h.search_company()
-        finally:
-            # Cancel the alarm
-            signal.alarm(0)
+            return h.search_company()
+        
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(perform_search)
+            try:
+                companies = future.result(timeout=Config.REQUEST_TIMEOUT)
+            except FuturesTimeoutError:
+                raise TimeoutError(f'Request exceeded timeout of {Config.REQUEST_TIMEOUT} seconds')
         
         if companies is None:
             return jsonify([]), 200
@@ -185,6 +195,58 @@ def generate_token():
         'token': token,
         'service': service_name
     }), 200
+
+
+@app.route('/api/bundesland', methods=['GET'])
+def get_bundesland():
+    """
+    Get bundesland code from district name (German or English).
+    
+    Query Parameters:
+    - name (required): District name in German or English
+    
+    Returns:
+    JSON object with bundesland code and full name
+    """
+    name = request.args.get('name')
+    if not name:
+        return jsonify({
+            'error': 'Missing required parameter: name'
+        }), 400
+    
+    code = get_bundesland_code(name)
+    
+    if not code:
+        return jsonify({
+            'error': f'Unknown district name: {name}',
+            'hint': 'Try German names (e.g., "Berlin", "Bayern") or English names (e.g., "Bavaria", "North Rhine-Westphalia")'
+        }), 404
+    
+    return jsonify({
+        'code': code,
+        'name_de': bundeslaender[code],
+        'input': name,
+        'form_field': f'bundesland{code}'
+    }), 200
+
+
+@app.route('/api/bundesland/list', methods=['GET'])
+def list_bundeslaender():
+    """
+    List all available bundesländer with their codes.
+    
+    Returns:
+    JSON array of bundesland objects
+    """
+    result = []
+    for code, name_de in bundeslaender.items():
+        result.append({
+            'code': code,
+            'name_de': name_de,
+            'form_field': f'bundesland{code}'
+        })
+    
+    return jsonify(result), 200
 
 
 @app.route('/api/health', methods=['GET'])
@@ -252,6 +314,13 @@ def api_docs():
                         'options': ['all', 'min', 'exact'],
                         'description': 'Search mode: all=contain all keywords; min=contain at least one keyword; exact=exact company name'
                     },
+                    'bundesland': {
+                        'type': 'string',
+                        'required': False,
+                        'description': 'Filter by German state(s). Comma-separated state codes',
+                        'options': list(bundeslaender.keys()),
+                        'example': 'BW,BY or just BW'
+                    },
                     'force': {
                         'type': 'boolean',
                         'required': False,
@@ -265,7 +334,27 @@ def api_docs():
                         'description': 'Enable debug mode'
                     }
                 },
-                'example': 'curl -H "Authorization: Bearer <token>" "http://localhost:5000/api/search?keywords=Gasag%20AG&mode=all"'
+                'example': 'curl -H "Authorization: Bearer <token>" "http://localhost:5000/api/search?keywords=Gasag%20AG&mode=all&bundesland=BE,HH"'
+            },
+            '/api/bundesland': {
+                'method': 'GET',
+                'authentication': False,
+                'description': 'Get bundesland code from district name (German or English)',
+                'parameters': {
+                    'name': {
+                        'type': 'string',
+                        'required': True,
+                        'description': 'District name in German or English',
+                        'examples': ['Berlin', 'Bayern', 'Bavaria', 'North Rhine-Westphalia', 'Nordrhein-Westfalen']
+                    }
+                },
+                'example': 'curl "http://localhost:5000/api/bundesland?name=Berlin"'
+            },
+            '/api/bundesland/list': {
+                'method': 'GET',
+                'authentication': False,
+                'description': 'List all available bundesländer with their codes',
+                'example': 'curl "http://localhost:5000/api/bundesland/list"'
             },
             '/api/health': {
                 'method': 'GET',
